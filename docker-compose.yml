@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: watches
+      POSTGRES_PASSWORD: watches
+      POSTGRES_DB: watches
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U watches -d watches"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  watches:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://watches:watches@postgres:5432/watches
+      UPLOADS_PATH: /data/uploads
+    volumes:
+      - watches-uploads:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  watches-uploads:

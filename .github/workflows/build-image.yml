@@ -1,0 +1,131 @@
+name: Build and push image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  ATLAS_REPO: jpansini3/pansini-atlas
+  ATLAS_DEV_KUSTOMIZATION: apps/watches/overlays/dev/kustomization.yaml
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      image_sha: ${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long,prefix=
+            type=raw,value=main,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  pin-dev:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pansini-atlas
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.ATLAS_REPO }}
+          token: ${{ secrets.ATLAS_DEPLOY_TOKEN }}
+          path: pansini-atlas
+
+      - name: Pin image SHA in overlays/dev
+        working-directory: pansini-atlas
+        env:
+          SHA: ${{ needs.build.outputs.image_sha }}
+          FILE: ${{ env.ATLAS_DEV_KUSTOMIZATION }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os, pathlib, re
+          path = pathlib.Path(os.environ["FILE"])
+          sha = os.environ["SHA"]
+          text = path.read_text()
+          new, n = re.subn(
+              r"(name:\s*ghcr\.io/jpansini3/watches\n\s+newTag:\s*)\S+",
+              rf"\g<1>{sha}",
+              text,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit(f"expected 1 newTag replacement, got {n}")
+          if new == text:
+              print(f"Dev already pinned to {sha}")
+          else:
+              path.write_text(new)
+              print(f"Updated {path}: newTag={sha}")
+          PY
+
+      - name: Commit and push atlas
+        working-directory: pansini-atlas
+        env:
+          SHA: ${{ needs.build.outputs.image_sha }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${{ env.ATLAS_DEV_KUSTOMIZATION }}"
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(watches): pin dev to ${SHA}"
+          git push origin HEAD:main

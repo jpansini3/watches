@@ -1,0 +1,92 @@
+name: Deploy to prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Git SHA to pin in prod (empty = use current atlas overlays/dev pin)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  ATLAS_REPO: jpansini3/pansini-atlas
+  ATLAS_DEV_KUSTOMIZATION: apps/watches/overlays/dev/kustomization.yaml
+  ATLAS_PROD_KUSTOMIZATION: apps/watches/overlays/prod/kustomization.yaml
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pansini-atlas
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.ATLAS_REPO }}
+          token: ${{ secrets.ATLAS_DEPLOY_TOKEN }}
+          path: pansini-atlas
+
+      - name: Resolve SHA and pin overlays/prod
+        working-directory: pansini-atlas
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          DEV_FILE: ${{ env.ATLAS_DEV_KUSTOMIZATION }}
+          PROD_FILE: ${{ env.ATLAS_PROD_KUSTOMIZATION }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os, pathlib, re, sys
+
+          def read_tag(path: pathlib.Path) -> str:
+              text = path.read_text()
+              m = re.search(
+                  r"name:\s*ghcr\.io/jpansini3/watches\n\s+newTag:\s*(\S+)",
+                  text,
+              )
+              if not m:
+                  raise SystemExit(f"could not find watches newTag in {path}")
+              return m.group(1)
+
+          def write_tag(path: pathlib.Path, sha: str) -> bool:
+              text = path.read_text()
+              new, n = re.subn(
+                  r"(name:\s*ghcr\.io/jpansini3/watches\n\s+newTag:\s*)\S+",
+                  rf"\g<1>{sha}",
+                  text,
+                  count=1,
+              )
+              if n != 1:
+                  raise SystemExit(f"expected 1 newTag replacement in {path}, got {n}")
+              if new == text:
+                  return False
+              path.write_text(new)
+              return True
+
+          input_sha = os.environ.get("INPUT_SHA", "").strip()
+          sha = input_sha or read_tag(pathlib.Path(os.environ["DEV_FILE"]))
+          if not re.fullmatch(r"[0-9a-f]{7,40}", sha):
+              raise SystemExit(f"refusing non-SHA tag: {sha!r}")
+
+          prod = pathlib.Path(os.environ["PROD_FILE"])
+          changed = write_tag(prod, sha)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              fh.write(f"PROMOTE_SHA={sha}\n")
+              fh.write(f"PROMOTE_CHANGED={'true' if changed else 'false'}\n")
+          print(f"Prod pin target: {sha} (changed={changed})")
+          PY
+
+      - name: Commit and push atlas
+        working-directory: pansini-atlas
+        run: |
+          set -euo pipefail
+          if [[ "${PROMOTE_CHANGED}" != "true" ]]; then
+            echo "Prod already pinned to ${PROMOTE_SHA} — nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${{ env.ATLAS_PROD_KUSTOMIZATION }}"
+          git commit -m "chore(watches): promote prod to ${PROMOTE_SHA}"
+          git push origin HEAD:main
