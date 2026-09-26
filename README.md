@@ -6,20 +6,17 @@ Chrono24 prices are ones you record. The app does not fetch listings.
 
 ## Local
 
-Node 24+:
+Node 24+. Data uses the shared Homebrew Postgres on `127.0.0.1:5432` (`brew services list`). Do not run `docker compose up -d postgres` — that collides with the shared instance. New app databases: [new-app.md](https://github.com/jpansini3/pansini-atlas/blob/main/templates/new-app.md).
 
 ```bash
 npm install
-cp .env.example .env.local   # set DATABASE_URL
-docker compose up -d postgres
+cp .env.example .env.local   # DATABASE_URL already points at 5432
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000). Health check: `/api/health`.
 
-Local Postgres is published on **5434** so it does not collide with other apps on 5432 or travel-plans on 5433.
-
-Full stack Docker:
+Full stack Docker (stop Homebrew Postgres first so port 5432 is free):
 
 ```bash
 docker compose up --build
