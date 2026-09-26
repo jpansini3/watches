@@ -15,7 +15,7 @@ function resolveDatabaseUrl(): string {
   const url = process.env.DATABASE_URL?.trim();
   if (!url) {
     throw new Error(
-      "DATABASE_URL is required (docker compose up -d postgres, then set it in .env.local)",
+      "DATABASE_URL is required (shared Homebrew Postgres on 127.0.0.1:5432, then set it in .env.local)",
     );
   }
   return url;
