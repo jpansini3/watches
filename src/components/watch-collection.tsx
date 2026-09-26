@@ -11,6 +11,7 @@ import { Input, Label } from "@/components/ui/input";
 import { fetchJson } from "@/lib/client";
 import { formatMoney } from "@/lib/money";
 import type { WatchSummary } from "@/lib/queries";
+import type { WatchLookupResult } from "@/lib/watch-lookup";
 import { cn } from "@/lib/utils";
 
 const VIEW_KEY = "watches-view";
@@ -185,6 +186,8 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [chrono24Url, setChrono24Url] = useState("");
   const [complications, setComplications] = useState("");
   const [saving, setSaving] = useState(false);
+  const [lookingUp, setLookingUp] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -194,6 +197,27 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  async function onLookup() {
+    setLookingUp(true);
+    setError(null);
+    setNote(null);
+    try {
+      const params = new URLSearchParams({ manufacturer, model });
+      const result = await fetchJson<WatchLookupResult>(`/api/watches/lookup?${params}`);
+      if (result.manufacturer) setManufacturer(result.manufacturer);
+      if (result.imageUrl) setImageUrl(result.imageUrl);
+      if (result.retailPrice) setRetailPrice(result.retailPrice);
+      if (result.chrono24Price) setChrono24Price(result.chrono24Price);
+      if (result.chrono24Url) setChrono24Url(result.chrono24Url);
+      if (result.complications) setComplications(result.complications);
+      setNote(result.note);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not look up that watch");
+    } finally {
+      setLookingUp(false);
+    }
+  }
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -239,6 +263,15 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         <form className="grid gap-4" onSubmit={onSubmit}>
           <Field label="Manufacturer" value={manufacturer} onChange={setManufacturer} required autoFocus />
           <Field label="Model" value={model} onChange={setModel} required />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={lookingUp || !manufacturer.trim() || !model.trim()}
+            onClick={onLookup}
+          >
+            {lookingUp ? "Looking up…" : "Look up details"}
+          </Button>
+          {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
           <PhotoField id="watch-photo" value={imageUrl} onChange={setImageUrl} />
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Price new" value={retailPrice} onChange={setRetailPrice} placeholder="12500" inputMode="decimal" />
