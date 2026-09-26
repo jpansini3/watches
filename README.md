@@ -2,7 +2,7 @@
 
 A list of watches to buy. Each watch has a photo, manufacturer, model, the price of a new one, and the cheapest Chrono24 price. Open a watch for a price graph and its complications. Next.js + **Postgres** (Drizzle). Uploads use local disk when `R2_*` is unset, or Cloudflare R2 (`pansini-uploads`) in the cluster.
 
-**Look up details** on the add form fills the photo, features, and prices when you enter a manufacturer and model. The new price comes from the manufacturer's US site. Chrono24 blocks automated price lookups, so that field gets the lowest matching dealer ask and a Chrono24 search link you can check.
+**Look up details** on the add form fills the photo, features, and prices when you enter a manufacturer and model. The photo comes from the manufacturer's site (or a Chrono24 listing when that site returns one). The new price comes from the manufacturer's US site. Chrono24 blocks automated price lookups, so that field gets the lowest matching dealer ask and a Chrono24 search link you can check.
 
 ## Local
 
