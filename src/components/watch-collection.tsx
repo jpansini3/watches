@@ -178,6 +178,7 @@ function PricePair({ watch, className }: { watch: WatchSummary; className?: stri
 
 function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const titleId = useId();
+  const [pageUrl, setPageUrl] = useState("");
   const [manufacturer, setManufacturer] = useState("");
   const [model, setModel] = useState("");
   const [imageUrl, setImageUrl] = useState("");
@@ -187,6 +188,7 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [complications, setComplications] = useState("");
   const [saving, setSaving] = useState(false);
   const [lookingUp, setLookingUp] = useState(false);
+  const [readingPage, setReadingPage] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -198,20 +200,38 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  function applyLookup(result: WatchLookupResult) {
+    if (result.manufacturer) setManufacturer(result.manufacturer);
+    if (result.model) setModel(result.model);
+    if (result.imageUrl) setImageUrl(result.imageUrl);
+    if (result.retailPrice) setRetailPrice(result.retailPrice);
+    if (result.chrono24Price) setChrono24Price(result.chrono24Price);
+    if (result.chrono24Url) setChrono24Url(result.chrono24Url);
+    if (result.complications) setComplications(result.complications);
+    setNote(result.note);
+  }
+
+  async function onLookupPage() {
+    setReadingPage(true);
+    setError(null);
+    setNote(null);
+    try {
+      const params = new URLSearchParams({ url: pageUrl.trim() });
+      applyLookup(await fetchJson<WatchLookupResult>(`/api/watches/lookup?${params}`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not read that page");
+    } finally {
+      setReadingPage(false);
+    }
+  }
+
   async function onLookup() {
     setLookingUp(true);
     setError(null);
     setNote(null);
     try {
       const params = new URLSearchParams({ manufacturer, model });
-      const result = await fetchJson<WatchLookupResult>(`/api/watches/lookup?${params}`);
-      if (result.manufacturer) setManufacturer(result.manufacturer);
-      if (result.imageUrl) setImageUrl(result.imageUrl);
-      if (result.retailPrice) setRetailPrice(result.retailPrice);
-      if (result.chrono24Price) setChrono24Price(result.chrono24Price);
-      if (result.chrono24Url) setChrono24Url(result.chrono24Url);
-      if (result.complications) setComplications(result.complications);
-      setNote(result.note);
+      applyLookup(await fetchJson<WatchLookupResult>(`/api/watches/lookup?${params}`));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not look up that watch");
     } finally {
@@ -261,12 +281,28 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
           </Button>
         </div>
         <form className="grid gap-4" onSubmit={onSubmit}>
-          <Field label="Manufacturer" value={manufacturer} onChange={setManufacturer} required autoFocus />
+          <Field
+            label="Manufacturer page"
+            value={pageUrl}
+            onChange={setPageUrl}
+            placeholder="https://nomos-glashuette.com/..."
+            type="url"
+            autoFocus
+          />
+          <div className="grid gap-2">
+            <Button type="button" variant="outline" disabled={readingPage || lookingUp || !pageUrl.trim()} onClick={onLookupPage}>
+              {readingPage ? "Reading page…" : "Fill from this page"}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Paste a product page from any manufacturer. The name, photo, and price are read from that page.
+            </p>
+          </div>
+          <Field label="Manufacturer" value={manufacturer} onChange={setManufacturer} required />
           <Field label="Model" value={model} onChange={setModel} required />
           <Button
             type="button"
             variant="outline"
-            disabled={lookingUp || !manufacturer.trim() || !model.trim()}
+            disabled={lookingUp || readingPage || !manufacturer.trim() || !model.trim()}
             onClick={onLookup}
           >
             {lookingUp ? "Looking up…" : "Look up details"}
@@ -323,6 +359,7 @@ function Field({
   placeholder,
   inputMode,
   autoFocus,
+  type,
 }: {
   label: string;
   value: string;
@@ -331,6 +368,7 @@ function Field({
   placeholder?: string;
   inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"];
   autoFocus?: boolean;
+  type?: React.HTMLInputTypeAttribute;
 }) {
   const id = useId();
   return (
@@ -338,11 +376,13 @@ function Field({
       <Label htmlFor={id}>{label}</Label>
       <Input
         id={id}
+        type={type}
         value={value}
         required={required}
         placeholder={placeholder}
         inputMode={inputMode}
         autoFocus={autoFocus}
+        spellCheck={type === "url" ? false : undefined}
         onChange={(event) => onChange(event.target.value)}
       />
     </div>
