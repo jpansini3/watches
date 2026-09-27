@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   chooseListing,
+  chooseProductImage,
   chooseRetailOffer,
   complicationsFromText,
   parseCatalogProduct,
+  parseMarkdownImages,
   parseRetailOffers,
   parseSearchCards,
   type ListingCard,
@@ -121,6 +123,7 @@ test("manufacturer grid prefers the steel Submariner Date over gold, green, and 
   const chosen = chooseRetailOffer(offers, "Submariner Date");
   assert.equal(chosen?.priceCents, 1_135_000);
   assert.equal(chosen?.reference, "126610LN");
+  assert.equal(chosen?.imageUrl, "https://media.rolex.com/m126610ln-0001");
 });
 
 test("a green Submariner Date prefers the LV reference", () => {
@@ -131,6 +134,41 @@ test("a green Submariner Date prefers the LV reference", () => {
 test("nearby prices prefer a steel bracelet when the model does not ask for a strap", () => {
   const chosen = chooseRetailOffer(parseRetailOffers(OMEGA_LIST), "Speedmaster");
   assert.equal(chosen?.priceCents, 910_000);
+});
+
+const NOMOS_SEARCH = `
+![Image 1: Square NOMOS watch](https://cdn.nomos-glashuette.com/img/tetra-2d-front-masked.jpg)
+
+[Tetra 27 duo doré](https://nomos-glashuette.com/en/tetra/tetra-27-duo-dore-405)
+
+![Image 2: Front view of a Tangente](https://cdn.nomos-glashuette.com/img/tangente-2d-front-masked.jpg)
+
+[Tangente](https://nomos-glashuette.com/en/tangente/tangente-101)
+
+![Image 5: Tangente with a date](https://cdn.nomos-glashuette.com/img/tangente-2date-front-masked.jpg)
+
+[Tangente 2date blue](https://nomos-glashuette.com/en/tangente/tangente-2date-blue-136)
+
+![Image 6: Case back](https://cdn.nomos-glashuette.com/img/tangente-2d-back-masked.jpg)
+
+[Tangente](https://nomos-glashuette.com/en/tangente/tangente-101)
+`;
+
+test("product photos prefer the named model on the manufacturer site", () => {
+  const shots = parseMarkdownImages(NOMOS_SEARCH);
+  assert.equal(
+    chooseProductImage(shots, "Nomos", "Tangente"),
+    "https://cdn.nomos-glashuette.com/img/tangente-2d-front-masked.jpg",
+  );
+  assert.equal(
+    chooseProductImage(shots, "Nomos", "Tangente 2date"),
+    "https://cdn.nomos-glashuette.com/img/tangente-2date-front-masked.jpg",
+  );
+});
+
+test("product photos ignore an unrelated manufacturer image", () => {
+  const shots = parseMarkdownImages(NOMOS_SEARCH);
+  assert.equal(chooseProductImage(shots, "Nomos", "Orion"), null);
 });
 
 test("chooseListing ignores a brand that does not match", () => {

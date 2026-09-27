@@ -27,6 +27,13 @@ export type RetailOffer = {
   label: string;
   reference: string | null;
   priceCents: number;
+  imageUrl: string | null;
+};
+
+export type ProductShot = {
+  url: string;
+  alt: string;
+  caption: string;
 };
 
 export type WatchLookupResult = {
@@ -161,23 +168,30 @@ export async function lookupWatch(
   }
 
   const chrono24Url = chrono24SearchUrl(manufacturer, model);
-  const [catalog, retail] = await Promise.all([
+  const [catalog, brand] = await Promise.all([
     lookupCatalog(manufacturer, model, fetchImpl),
-    lookupRetail(manufacturer, model, fetchImpl),
+    lookupManufacturer(manufacturer, model, fetchImpl),
   ]);
-  if (catalog || retail) {
+  let imageUrl = brand?.imageUrl ?? null;
+  let imageSource: "manufacturer" | "chrono24" | null = imageUrl ? "manufacturer" : null;
+  if (!imageUrl) {
+    imageUrl = await lookupChrono24Image(manufacturer, model, fetchImpl);
+    if (imageUrl) imageSource = "chrono24";
+  }
+  const retail = brand?.offer ? { ...brand.offer, host: brand.host ?? "the manufacturer site" } : null;
+  if (catalog || retail || imageUrl) {
     const displayManufacturer = catalog?.brand && sameName(catalog.brand, manufacturer) ? catalog.brand : manufacturer;
     const complications = catalog ? complicationsFromText(`${catalog.name} ${catalog.description}`) : [];
     const marketCents = catalog?.priceCents ?? null;
     return {
       manufacturer: displayManufacturer,
       model,
-      imageUrl: catalog?.imageUrl ?? null,
+      imageUrl,
       retailPrice: retail ? formatDollars(retail.priceCents) : null,
       chrono24Price: marketCents == null ? null : formatDollars(marketCents),
       chrono24Url,
       complications: complications.join(", "),
-      note: lookupNote(marketCents, retail),
+      note: lookupNote(marketCents, retail, imageSource ? { source: imageSource, host: brand?.host ?? null } : null),
     };
   }
 
@@ -186,12 +200,12 @@ export async function lookupWatch(
     return {
       manufacturer,
       model,
-      imageUrl: wiki.imageUrl,
+      imageUrl: null,
       retailPrice: null,
       chrono24Price: null,
       chrono24Url,
       complications: wiki.complications.join(", "),
-      note: "Filled the photo and features from Wikipedia. Prices were not listed there, and Chrono24 blocks automated lookups.",
+      note: "Filled the features from Wikipedia. No product photo was listed on the manufacturer site, and Chrono24 blocks automated photo lookups.",
     };
   }
 
@@ -211,19 +225,38 @@ const BRAND_SITES: { names: string[]; pages: (model: string) => string[] }[] = [
     names: ["tudor"],
     pages: (model) => [`https://www.tudorwatch.com/en/watches/${familySlug(model)}`],
   },
+  {
+    names: ["nomos"],
+    pages: (model) => [`https://nomos-glashuette.com/en/search?q=${encodeURIComponent(model)}`],
+  },
 ];
 
-async function lookupRetail(manufacturer: string, model: string, fetchImpl: typeof fetch) {
+async function lookupManufacturer(manufacturer: string, model: string, fetchImpl: typeof fetch) {
   const pages = manufacturerPages(manufacturer, model);
   const discovered = pages.length > 0 ? [] : await discoverManufacturerPages(manufacturer, model, fetchImpl);
+  let imageUrl: string | null = null;
+  let host: string | null = null;
   for (const page of [...pages, ...discovered]) {
     const text = await readManufacturerPage(page, fetchImpl);
     if (!text) continue;
+    const pageHost = new URL(page).hostname.replace(/^www\./, "");
+    const shot = chooseProductImage(parseMarkdownImages(text), manufacturer, model);
     const offer = chooseRetailOffer(parseRetailOffers(text), model);
+    if (!imageUrl && (offer?.imageUrl || shot)) {
+      imageUrl = offer?.imageUrl ?? shot;
+      host = pageHost;
+    }
     if (!offer) continue;
-    return { ...offer, host: new URL(page).hostname.replace(/^www\./, "") };
+    return { offer, imageUrl: offer.imageUrl ?? shot ?? imageUrl, host: pageHost };
   }
-  return null;
+  if (!imageUrl) return null;
+  return { offer: null, imageUrl, host };
+}
+
+async function lookupChrono24Image(manufacturer: string, model: string, fetchImpl: typeof fetch) {
+  const text = await readManufacturerPage(chrono24SearchUrl(manufacturer, model), fetchImpl);
+  if (!text || /just a moment|captcha|cf-browser-verification/i.test(text.slice(0, 800))) return null;
+  return chooseProductImage(parseMarkdownImages(text), manufacturer, model);
 }
 
 function manufacturerPages(manufacturer: string, model: string): string[] {
@@ -252,13 +285,19 @@ function familySlug(model: string): string {
 }
 
 async function discoverManufacturerPages(manufacturer: string, model: string, fetchImpl: typeof fetch): Promise<string[]> {
+  const origin = await discoverBrandOrigin(manufacturer, fetchImpl);
+  if (!origin) return [];
+  const query = encodeURIComponent(model.trim());
+  return [new URL(`/en/search?q=${query}`, origin).toString(), new URL(`/search?q=${query}`, origin).toString()];
+}
+
+async function discoverBrandOrigin(manufacturer: string, fetchImpl: typeof fetch): Promise<string | null> {
   const query = new URL("https://www.bing.com/search");
   query.searchParams.set("format", "rss");
-  query.searchParams.set("q", `${manufacturer} ${model} official retail price`);
+  query.searchParams.set("q", `${manufacturer} official website`);
   const rss = await fetchText(query, fetchImpl);
-  if (!rss) return [];
+  if (!rss) return null;
   const links = [...rss.matchAll(/<link>(https:[^<]+)<\/link>/g)].map((match) => match[1]);
-  const pages: string[] = [];
   for (const link of links) {
     let url: URL;
     try {
@@ -267,16 +306,9 @@ async function discoverManufacturerPages(manufacturer: string, model: string, fe
       continue;
     }
     if (!hostMatchesBrand(url.hostname, manufacturer)) continue;
-    const family = familySlug(model);
-    if (url.pathname === "/" || url.pathname.split("/").filter(Boolean).length < 2) {
-      pages.push(new URL(`/en-us/watches/${family}`, url.origin).toString());
-      pages.push(new URL(`/watches/${family}`, url.origin).toString());
-    } else {
-      pages.push(url.toString());
-    }
-    if (pages.length >= 2) break;
+    return url.origin;
   }
-  return pages;
+  return null;
 }
 
 function hostMatchesBrand(hostname: string, manufacturer: string): boolean {
@@ -299,21 +331,22 @@ async function readManufacturerPage(page: string, fetchImpl: typeof fetch): Prom
 
 function parseRolexGrid(text: string): RetailOffer[] {
   const pattern =
-    /m(\d{5,6}[a-z0-9]*)-\d{4}\)([\s\S]{0,700}?)##\s*([^\n]+)([\s\S]{0,280}?)\$([0-9,]+)\s*USD/g;
+    /!\[([^\]]*)\]\((https:\/\/[^)\s]+\/m(\d{5,6}[a-z0-9]*)-\d{4})\)([\s\S]{0,700}?)##\s*([^\n]+)([\s\S]{0,280}?)\$([0-9,]+)\s*USD/g;
   const offers: RetailOffer[] = [];
   for (const match of text.matchAll(pattern)) {
-    const priceCents = dollarsToCents(match[5]);
+    const priceCents = dollarsToCents(match[7]);
     if (priceCents == null) continue;
-    const name = match[3].trim();
-    const detail = match[4]
+    const name = match[5].trim();
+    const detail = match[6]
       .split("\n")
       .map((line) => line.replace(/\s+/g, " ").trim())
       .find((line) => line.length > 2 && !line.startsWith("$") && !line.startsWith("*") && !line.startsWith("["));
-    const dial = match[2].match(/Dial\s*:\s*([^,\]]+)/i)?.[1]?.trim();
+    const dial = match[1].match(/Dial\s*:\s*([^,\]]+)/i)?.[1]?.trim();
     offers.push({
       label: [name, detail, dial ? `Dial: ${dial}` : null].filter(Boolean).join(", "),
-      reference: match[1].toUpperCase(),
+      reference: match[3].toUpperCase(),
       priceCents,
+      imageUrl: match[2],
     });
   }
   return offers;
@@ -338,7 +371,7 @@ function parseNearbyPrices(text: string): RetailOffer[] {
     const label = lines.slice(-3).join(", ");
     if (!label) continue;
     const reference = slice.match(/\b[mM]?\d{5,}[a-z0-9]*\b/g)?.at(-1) ?? null;
-    offers.push({ label, reference: reference?.toUpperCase() ?? null, priceCents });
+    offers.push({ label, reference: reference?.toUpperCase() ?? null, priceCents, imageUrl: null });
   }
   return offers;
 }
@@ -368,18 +401,108 @@ function retailScore(offer: RetailOffer, model: string): number {
   return score;
 }
 
-function lookupNote(marketCents: number | null, retail: { priceCents: number; host: string; label: string; reference: string | null } | null): string {
+export function parseMarkdownImages(text: string): ProductShot[] {
+  const pattern = /!\[([^\]]*)\]\((https:\/\/[^)\s]+)\)/g;
+  const matches = [...text.matchAll(pattern)];
+  return matches.flatMap((match, index) => {
+    const url = match[2];
+    if (!usableImageUrl(url)) return [];
+    const start = (match.index ?? 0) + match[0].length;
+    const end = matches[index + 1]?.index ?? Math.min(text.length, start + 600);
+    return [{ url, alt: match[1], caption: text.slice(start, end) }];
+  });
+}
+
+export function chooseProductImage(shots: ProductShot[], manufacturer: string, model: string): string | null {
+  const ranked = shots
+    .map((shot) => ({ shot, score: imageScore(shot, manufacturer, model) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+  return ranked[0]?.shot.url ?? null;
+}
+
+function imageScore(shot: ProductShot, manufacturer: string, model: string): number {
+  const queryTokens = tokens(model);
+  if (queryTokens.length === 0) return 0;
+  const title = shotTitle(shot);
+  const titleTokens = tokens(title);
+  const hay = normalize(`${title} ${shot.alt} ${shot.url}`);
+  const hits = queryTokens.filter((token) => hay.includes(token));
+  const named = queryTokens.some((token) => titleTokens.includes(token) || normalize(shot.url).includes(token));
+  if (hits.length === 0 || !named) return 0;
+  const ignored = new Set([
+    ...tokens(manufacturer),
+    "watch",
+    "watches",
+    "ref",
+    "the",
+    "and",
+    "with",
+    "front",
+    "view",
+    "dial",
+    "mm",
+  ]);
+  const extras = titleTokens.filter((token) => !queryTokens.includes(token) && !ignored.has(token));
+  let score = hits.length * 10 - extras.length * 3;
+  if (hits.length === queryTokens.length) score += 4;
+  const blob = normalize(`${shot.alt} ${shot.url}`);
+  if (blob.includes("front")) score += 3;
+  if (/\b(back|wrist|wristshot|detail|menu|logo|icon|banner)\b/.test(blob)) score -= 5;
+  const query = normalize(model);
+  const mentions = (words: string[]) => words.some((word) => query.includes(word));
+  if (!mentions(["gold", "yellow", "rose", "everose", "platinum"]) && /\bgold\b|\bplatinum\b|\beverose\b/.test(hay)) {
+    score -= 4;
+  }
+  return score > 0 ? score : 0;
+}
+
+function shotTitle(shot: ProductShot): string {
+  const link = shot.caption.match(/\[([^\]\n]+)\]\(https?:\/\//);
+  if (link && !/^image\s+\d+/i.test(link[1])) return link[1];
+  const heading = shot.caption.match(/#{2,3}\s+([^\n]+)/);
+  if (heading) return heading[1];
+  return shot.alt.replace(/^image\s+\d+\s*:\s*/i, "");
+}
+
+function usableImageUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  const host = parsed.hostname.toLowerCase();
+  if (/(^|\.)bing\.com$|(^|\.)doubleclick\.net$|(^|\.)facebook\.com$|(^|\.)clarity\.ms$/.test(host)) return false;
+  if (/\.(svg|gif)(\?|$)/i.test(parsed.pathname)) return false;
+  return true;
+}
+
+function lookupNote(
+  marketCents: number | null,
+  retail: { priceCents: number; host: string; label: string; reference: string | null } | null,
+  image: { source: "manufacturer" | "chrono24"; host: string | null } | null,
+): string {
   const parts: string[] = [];
+  if (image?.source === "manufacturer" && image.host) {
+    parts.push(`Photo is from ${image.host}.`);
+  } else if (image?.source === "chrono24") {
+    parts.push("Photo is from a Chrono24 listing.");
+  } else {
+    parts.push("No product photo was listed on the manufacturer site, and Chrono24 blocks automated photo lookups.");
+  }
   if (retail) {
     const reference = retail.reference ? ` (${retail.reference})` : "";
     parts.push(`New price is ${formatAsk(retail.priceCents)} on ${retail.host} for ${retail.label}${reference}.`);
+  } else {
+    parts.push("The manufacturer's site did not list a new US retail price.");
   }
   if (marketCents != null) {
     parts.push(
-      `Photo and features came from a SwissWatchExpo listing. ${formatAsk(marketCents)} is that listing's ask, placed in the Chrono24 price because Chrono24 blocks automated lookups. Check the link and replace it if the cheapest listing differs.`,
+      `${formatAsk(marketCents)} is a dealer listing's ask, placed in the Chrono24 price because Chrono24 blocks automated price lookups. Check the link and replace it if the cheapest listing differs.`,
     );
   }
-  if (!retail) parts.push("The manufacturer's site did not list a new US retail price.");
   return parts.join(" ");
 }
 
@@ -406,8 +529,6 @@ async function lookupCatalog(manufacturer: string, model: string, fetchImpl: typ
 type WikiPage = {
   title?: string;
   extract?: string;
-  original?: { source?: string };
-  thumbnail?: { source?: string };
 };
 
 async function lookupWikipedia(manufacturer: string, model: string, fetchImpl: typeof fetch) {
@@ -416,9 +537,7 @@ async function lookupWikipedia(manufacturer: string, model: string, fetchImpl: t
   url.searchParams.set("generator", "search");
   url.searchParams.set("gsrsearch", `${manufacturer} ${model}`);
   url.searchParams.set("gsrlimit", "5");
-  url.searchParams.set("prop", "pageimages|extracts");
-  url.searchParams.set("piprop", "original|thumbnail");
-  url.searchParams.set("pithumbsize", "800");
+  url.searchParams.set("prop", "extracts");
   url.searchParams.set("exintro", "1");
   url.searchParams.set("explaintext", "1");
   url.searchParams.set("format", "json");
@@ -441,9 +560,7 @@ async function lookupWikipedia(manufacturer: string, model: string, fetchImpl: t
     .sort((a, b) => b.hits - a.hits);
   const best = ranked[0]?.page;
   if (!best) return null;
-  const imageUrl = best.original?.source ?? best.thumbnail?.source ?? null;
   return {
-    imageUrl: imageUrl && imageUrl.startsWith("https://") ? imageUrl : null,
     complications: complicationsFromText(`${best.title ?? ""} ${best.extract ?? ""}`),
   };
 }
