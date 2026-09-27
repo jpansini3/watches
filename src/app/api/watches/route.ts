@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
     const watch = await createWatch({
       manufacturer,
       model,
+      referenceNumber: optionalString(body.referenceNumber) ?? null,
       imageUrl: optionalImageUrl(body.imageUrl) ?? null,
       chrono24Url: optionalHttpUrl(body.chrono24Url) ?? null,
       retailPriceCents: parseMoneyToCents(body.retailPrice),

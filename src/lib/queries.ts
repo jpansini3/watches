@@ -8,7 +8,7 @@ import {
 } from "@drizzle/schema";
 import { db } from "@/lib/db";
 import { withDbTransaction } from "@/lib/db-transaction";
-import { latestPriceCents, todayIso, type PriceRow } from "@/lib/money";
+import { latestPriceAction, latestPriceCents, todayIso, type PriceRow } from "@/lib/money";
 
 export type ComplicationItem = { id: number; name: string };
 
@@ -16,6 +16,7 @@ export type WatchSummary = {
   id: number;
   manufacturer: string;
   model: string;
+  referenceNumber: string | null;
   imageUrl: string | null;
   chrono24Url: string | null;
   retailPriceCents: number | null;
@@ -30,6 +31,7 @@ export type WatchDetail = WatchSummary & {
 export type WatchInput = {
   manufacturer: string;
   model: string;
+  referenceNumber?: string | null;
   imageUrl?: string | null;
   chrono24Url?: string | null;
   retailPriceCents?: number | null;
@@ -41,15 +43,30 @@ export type WatchInput = {
 export type WatchPatch = {
   manufacturer?: string;
   model?: string;
+  referenceNumber?: string | null;
   imageUrl?: string | null;
   chrono24Url?: string | null;
+  retailPriceCents?: number | null;
+  chrono24PriceCents?: number | null;
 };
+
+export type PricePatch = {
+  source?: PriceSource;
+  amountCents?: number;
+  recordedOn?: string;
+};
+
+function blankToNull(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : null;
+}
 
 function summaryFrom(
   row: {
     id: number;
     manufacturer: string;
     model: string;
+    referenceNumber: string | null;
     imageUrl: string | null;
     chrono24Url: string | null;
   },
@@ -94,6 +111,7 @@ export async function listWatches(): Promise<WatchSummary[]> {
       id: watches.id,
       manufacturer: manufacturers.name,
       model: watches.model,
+      referenceNumber: watches.referenceNumber,
       imageUrl: watches.imageUrl,
       chrono24Url: watches.chrono24Url,
     })
@@ -111,6 +129,7 @@ export async function getWatch(id: number): Promise<WatchDetail | null> {
       manufacturerId: watches.manufacturerId,
       manufacturer: manufacturers.name,
       model: watches.model,
+      referenceNumber: watches.referenceNumber,
       imageUrl: watches.imageUrl,
       chrono24Url: watches.chrono24Url,
     })
@@ -184,6 +203,7 @@ export async function createWatch(input: WatchInput): Promise<WatchDetail> {
       .values({
         manufacturerId,
         model,
+        referenceNumber: blankToNull(input.referenceNumber),
         imageUrl: input.imageUrl ?? null,
         chrono24Url: input.chrono24Url ?? null,
       })
@@ -215,6 +235,7 @@ export async function updateWatch(id: number, patch: WatchPatch): Promise<WatchD
     const values: {
       manufacturerId?: number;
       model?: string;
+      referenceNumber?: string | null;
       imageUrl?: string | null;
       chrono24Url?: string | null;
     } = {};
@@ -226,16 +247,43 @@ export async function updateWatch(id: number, patch: WatchPatch): Promise<WatchD
       if (!model) throw new Error("Model is required");
       values.model = model;
     }
+    if (patch.referenceNumber !== undefined) values.referenceNumber = blankToNull(patch.referenceNumber);
     if (patch.imageUrl !== undefined) values.imageUrl = patch.imageUrl;
     if (patch.chrono24Url !== undefined) values.chrono24Url = patch.chrono24Url;
     if (Object.keys(values).length > 0) {
       await db.update(watches).set(values).where(eq(watches.id, id));
+    }
+    if (patch.retailPriceCents !== undefined) {
+      await applyLatestPrice(id, "retail", patch.retailPriceCents);
+    }
+    if (patch.chrono24PriceCents !== undefined) {
+      await applyLatestPrice(id, "chrono24", patch.chrono24PriceCents);
     }
     if (values.manufacturerId && values.manufacturerId !== previousManufacturerId) {
       await deleteManufacturerIfUnused(previousManufacturerId);
     }
   });
   return getWatch(id);
+}
+
+async function applyLatestPrice(watchId: number, source: PriceSource, amountCents: number | null) {
+  const rows = await db
+    .select({
+      id: pricePoints.id,
+      source: pricePoints.source,
+      amountCents: pricePoints.amountCents,
+      recordedOn: pricePoints.recordedOn,
+    })
+    .from(pricePoints)
+    .where(eq(pricePoints.watchId, watchId));
+  const action = latestPriceAction(rows, source, amountCents, todayIso());
+  if (action.type === "insert") {
+    await insertPrice(watchId, source, action.amountCents, action.recordedOn);
+  } else if (action.type === "update") {
+    await db.update(pricePoints).set({ amountCents: action.amountCents }).where(eq(pricePoints.id, action.id));
+  } else if (action.type === "delete") {
+    await db.delete(pricePoints).where(eq(pricePoints.id, action.id));
+  }
 }
 
 export async function deleteWatch(id: number): Promise<boolean> {
@@ -263,6 +311,19 @@ export async function addPricePoint(
   return getWatch(watchId);
 }
 
+export async function updatePricePoint(id: number, patch: PricePatch): Promise<WatchDetail | null> {
+  const [row] = await db.select({ watchId: pricePoints.watchId }).from(pricePoints).where(eq(pricePoints.id, id));
+  if (!row) return null;
+  const values: { source?: PriceSource; amountCents?: number; recordedOn?: string } = {};
+  if (patch.source !== undefined) values.source = patch.source;
+  if (patch.amountCents !== undefined) values.amountCents = patch.amountCents;
+  if (patch.recordedOn !== undefined) values.recordedOn = patch.recordedOn;
+  if (Object.keys(values).length > 0) {
+    await db.update(pricePoints).set(values).where(eq(pricePoints.id, id));
+  }
+  return getWatch(row.watchId);
+}
+
 export async function deletePricePoint(id: number): Promise<number | null> {
   const [row] = await db
     .delete(pricePoints)
@@ -286,6 +347,25 @@ export async function addComplication(watchId: number, name: string): Promise<Wa
   const rank = existing.reduce((max, row) => Math.max(max, row.rank), -1) + 1;
   await db.insert(complications).values({ watchId, name: trimmed, rank });
   return getWatch(watchId);
+}
+
+export async function updateComplication(id: number, name: string): Promise<WatchDetail | null> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Complication name is required");
+  const [row] = await db
+    .select({ watchId: complications.watchId })
+    .from(complications)
+    .where(eq(complications.id, id));
+  if (!row) return null;
+  const existing = await db
+    .select({ id: complications.id, name: complications.name })
+    .from(complications)
+    .where(eq(complications.watchId, row.watchId));
+  if (existing.some((item) => item.id !== id && item.name.toLowerCase() === trimmed.toLowerCase())) {
+    throw new Error("That complication is already listed");
+  }
+  await db.update(complications).set({ name: trimmed }).where(eq(complications.id, id));
+  return getWatch(row.watchId);
 }
 
 export async function deleteComplication(id: number): Promise<number | null> {

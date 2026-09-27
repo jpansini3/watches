@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  centsToDollarsInput,
   chartSeries,
   formatMoney,
+  latestPriceAction,
   latestPriceCents,
   parseIsoDate,
   parseMoneyToCents,
@@ -39,6 +41,29 @@ test("latest price is the newest day, then the highest id", () => {
   assert.equal(latestPriceCents(prices, "retail"), 250);
   assert.equal(latestPriceCents(prices, "chrono24"), 180);
   assert.equal(latestPriceCents([], "retail"), null);
+});
+
+test("editing the current price updates today or appends a later day", () => {
+  const prices: PriceRow[] = [
+    { id: 1, source: "retail", amountCents: 100_00, recordedOn: "2026-09-01" },
+    { id: 2, source: "chrono24", amountCents: 90_00, recordedOn: "2026-09-26" },
+  ];
+  assert.deepEqual(latestPriceAction(prices, "retail", 100_00, "2026-09-26"), { type: "keep" });
+  assert.deepEqual(latestPriceAction(prices, "retail", 110_00, "2026-09-26"), {
+    type: "insert",
+    amountCents: 110_00,
+    recordedOn: "2026-09-26",
+  });
+  assert.deepEqual(latestPriceAction(prices, "chrono24", 80_00, "2026-09-26"), {
+    type: "update",
+    id: 2,
+    amountCents: 80_00,
+  });
+  assert.deepEqual(latestPriceAction(prices, "retail", null, "2026-09-26"), { type: "delete", id: 1 });
+  assert.deepEqual(latestPriceAction([], "retail", null, "2026-09-26"), { type: "keep" });
+  assert.equal(centsToDollarsInput(1_250_000), "12500");
+  assert.equal(centsToDollarsInput(1_250_050), "12500.50");
+  assert.equal(centsToDollarsInput(null), "");
 });
 
 test("chart series keeps the latest quote per day", () => {

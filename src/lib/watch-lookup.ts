@@ -39,6 +39,7 @@ export type ProductShot = {
 export type WatchLookupResult = {
   manufacturer: string;
   model: string;
+  referenceNumber: string | null;
   imageUrl: string | null;
   retailPrice: string | null;
   chrono24Price: string | null;
@@ -186,6 +187,7 @@ export async function lookupWatch(
     return {
       manufacturer: displayManufacturer,
       model,
+      referenceNumber: retail?.reference ?? null,
       imageUrl,
       retailPrice: retail ? formatDollars(retail.priceCents) : null,
       chrono24Price: marketCents == null ? null : formatDollars(marketCents),
@@ -200,6 +202,7 @@ export async function lookupWatch(
     return {
       manufacturer,
       model,
+      referenceNumber: null,
       imageUrl: null,
       retailPrice: null,
       chrono24Price: null,
