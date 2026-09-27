@@ -1,5 +1,9 @@
 export type PriceSource = "retail" | "chrono24";
 
+export function isPriceSource(value: unknown): value is PriceSource {
+  return value === "retail" || value === "chrono24";
+}
+
 export function parseMoneyToCents(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const raw = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
@@ -22,6 +26,13 @@ export function formatMoney(cents: number | null | undefined): string {
     style: "currency",
     currency: "USD",
   }).format(cents / 100);
+}
+
+/** Dollar text for an editable price field. Whole dollars omit the decimal. */
+export function centsToDollarsInput(cents: number | null | undefined): string {
+  if (cents == null) return "";
+  const dollars = cents / 100;
+  return Number.isInteger(dollars) ? String(dollars) : dollars.toFixed(2);
 }
 
 export function todayIso(date = new Date()): string {
@@ -59,7 +70,7 @@ export type PriceRow = {
   recordedOn: string;
 };
 
-export function latestPriceCents(prices: PriceRow[], source: PriceSource): number | null {
+export function latestPriceRow(prices: PriceRow[], source: PriceSource): PriceRow | null {
   let latest: PriceRow | null = null;
   for (const price of prices) {
     if (price.source !== source) continue;
@@ -71,7 +82,38 @@ export function latestPriceCents(prices: PriceRow[], source: PriceSource): numbe
       latest = price;
     }
   }
-  return latest?.amountCents ?? null;
+  return latest;
+}
+
+export function latestPriceCents(prices: PriceRow[], source: PriceSource): number | null {
+  return latestPriceRow(prices, source)?.amountCents ?? null;
+}
+
+export type LatestPriceAction =
+  | { type: "keep" }
+  | { type: "insert"; amountCents: number; recordedOn: string }
+  | { type: "update"; id: number; amountCents: number }
+  | { type: "delete"; id: number };
+
+/**
+ * How a change to the current price should land in history.
+ * A same-day correction updates that quote. A later change adds a new day.
+ * Clearing the field removes only the latest quote.
+ */
+export function latestPriceAction(
+  prices: PriceRow[],
+  source: PriceSource,
+  nextCents: number | null,
+  today: string,
+): LatestPriceAction {
+  const latest = latestPriceRow(prices, source);
+  if (nextCents == null) {
+    return latest ? { type: "delete", id: latest.id } : { type: "keep" };
+  }
+  if (!latest) return { type: "insert", amountCents: nextCents, recordedOn: today };
+  if (latest.amountCents === nextCents) return { type: "keep" };
+  if (latest.recordedOn === today) return { type: "update", id: latest.id, amountCents: nextCents };
+  return { type: "insert", amountCents: nextCents, recordedOn: today };
 }
 
 export type ChartPoint = { date: string; cents: number };

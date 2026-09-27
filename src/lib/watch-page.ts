@@ -40,14 +40,15 @@ export async function lookupProductPage(
   const host = new URL(finalUrl).hostname.replace(/^www\./, "");
   const retailPrice = product.currency === "USD" && product.priceCents != null ? formatDollars(product.priceCents) : null;
   const manufacturer = product.manufacturer ?? "";
-  const model = modelWithReference(product.model, product.reference);
+  const model = product.model;
   return {
     manufacturer,
     model,
+    referenceNumber: product.reference,
     imageUrl: product.imageUrl,
     retailPrice,
     chrono24Price: null,
-    chrono24Url: model ? chrono24SearchUrl(manufacturer, model) : "",
+    chrono24Url: model ? chrono24SearchUrl(manufacturer, modelWithReference(model, product.reference)) : "",
     complications: product.complications.join(", "),
     note: pageNote(host, product),
   };

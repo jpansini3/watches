@@ -140,6 +140,9 @@ function WatchCard({ watch }: { watch: WatchSummary }) {
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.14em] text-brass">{watch.manufacturer}</p>
           <h2 className="mt-1 font-serif text-xl leading-tight">{watch.model}</h2>
+          {watch.referenceNumber ? (
+            <p className="mt-1 truncate text-sm text-muted-foreground">Ref. {watch.referenceNumber}</p>
+          ) : null}
         </div>
         <PricePair watch={watch} />
       </div>
@@ -154,6 +157,9 @@ function WatchRow({ watch }: { watch: WatchSummary }) {
       <div className="min-w-0 flex-1">
         <p className="truncate text-xs font-medium uppercase tracking-[0.14em] text-brass">{watch.manufacturer}</p>
         <h2 className="truncate font-serif text-lg leading-tight">{watch.model}</h2>
+        {watch.referenceNumber ? (
+          <p className="truncate text-sm text-muted-foreground">Ref. {watch.referenceNumber}</p>
+        ) : null}
         <PricePair watch={watch} className="mt-2 sm:hidden" />
       </div>
       <PricePair watch={watch} className="hidden shrink-0 text-right sm:grid" />
@@ -181,6 +187,7 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [pageUrl, setPageUrl] = useState("");
   const [manufacturer, setManufacturer] = useState("");
   const [model, setModel] = useState("");
+  const [referenceNumber, setReferenceNumber] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [retailPrice, setRetailPrice] = useState("");
   const [chrono24Price, setChrono24Price] = useState("");
@@ -203,6 +210,7 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   function applyLookup(result: WatchLookupResult) {
     if (result.manufacturer) setManufacturer(result.manufacturer);
     if (result.model) setModel(result.model);
+    if (result.referenceNumber) setReferenceNumber(result.referenceNumber);
     if (result.imageUrl) setImageUrl(result.imageUrl);
     if (result.retailPrice) setRetailPrice(result.retailPrice);
     if (result.chrono24Price) setChrono24Price(result.chrono24Price);
@@ -249,6 +257,7 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         body: JSON.stringify({
           manufacturer,
           model,
+          referenceNumber: referenceNumber || null,
           imageUrl: imageUrl || null,
           retailPrice: retailPrice || null,
           chrono24Price: chrono24Price || null,
@@ -294,11 +303,12 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
               {readingPage ? "Reading page…" : "Fill from this page"}
             </Button>
             <p className="text-xs text-muted-foreground">
-              Paste a product page from any manufacturer. The name, photo, and price are read from that page.
+              Paste a product page from any manufacturer. The name, reference number, photo, and price are read from that page.
             </p>
           </div>
           <Field label="Manufacturer" value={manufacturer} onChange={setManufacturer} required />
           <Field label="Model" value={model} onChange={setModel} required />
+          <Field label="Reference number" value={referenceNumber} onChange={setReferenceNumber} placeholder="126610LN" />
           <Button
             type="button"
             variant="outline"

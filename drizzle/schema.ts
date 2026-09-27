@@ -22,6 +22,7 @@ export const watches = pgTable("watches", {
     .notNull()
     .references(() => manufacturers.id),
   model: text("model").notNull(),
+  referenceNumber: text("reference_number"),
   imageUrl: text("image_url"),
   chrono24Url: text("chrono24_url"),
 });

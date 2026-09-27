@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { priceSources, type PriceSource } from "@drizzle/schema";
 import { jsonError, parseId } from "@/lib/api";
 import { dbReady } from "@/lib/db";
-import { parseIsoDate, parseMoneyToCents, todayIso } from "@/lib/money";
+import { isPriceSource, parseIsoDate, parseMoneyToCents, todayIso } from "@/lib/money";
 import { addPricePoint } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
-
-function isPriceSource(value: unknown): value is PriceSource {
-  return typeof value === "string" && (priceSources as readonly string[]).includes(value);
-}
 
 export async function POST(
   request: NextRequest,

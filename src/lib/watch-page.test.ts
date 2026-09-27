@@ -168,6 +168,7 @@ test("lookup keeps a foreign price out of the dollar field", async () => {
   ]);
   assert.equal(result.manufacturer, "Nomos");
   assert.equal(result.model, "Club Campus");
+  assert.equal(result.referenceNumber, null);
   assert.equal(result.retailPrice, null);
   assert.match(result.note, /EUR/);
   assert.match(result.note, /shop\.example/);
@@ -179,7 +180,8 @@ test("lookup reads a usd product page", async () => {
     { address: "93.184.216.34" },
   ]);
   assert.equal(result.manufacturer, "NOMOS Glashütte");
-  assert.equal(result.model, "Tangente Sport neomatik 42 date 580");
+  assert.equal(result.model, "Tangente Sport neomatik 42 date");
+  assert.equal(result.referenceNumber, "580");
   assert.equal(result.retailPrice, "5900");
   assert.equal(result.chrono24Price, null);
   assert.match(result.note, /Reference 580/);
