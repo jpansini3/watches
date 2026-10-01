@@ -36,7 +36,7 @@ export function optionalImageUrl(value: unknown): string | null | undefined {
   return url.toString();
 }
 
-export function optionalHttpUrl(value: unknown): string | null | undefined {
+export function optionalHttpUrl(value: unknown, label = "Link"): string | null | undefined {
   const raw = optionalString(value);
   if (raw === undefined) return undefined;
   if (raw === null || raw.trim() === "") return null;
@@ -44,10 +44,10 @@ export function optionalHttpUrl(value: unknown): string | null | undefined {
   try {
     url = new URL(raw.trim());
   } catch {
-    throw new Error("Chrono24 link must be an http or https URL");
+    throw new Error(`${label} must be an http or https URL`);
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Chrono24 link must be an http or https URL");
+    throw new Error(`${label} must be an http or https URL`);
   }
   return url.toString();
 }

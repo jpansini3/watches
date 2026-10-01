@@ -38,7 +38,8 @@ export async function PATCH(
       model: model === undefined ? undefined : (model ?? ""),
       referenceNumber: referenceNumber === undefined ? undefined : referenceNumber,
       imageUrl: optionalImageUrl(body.imageUrl),
-      chrono24Url: optionalHttpUrl(body.chrono24Url),
+      pageUrl: optionalHttpUrl(body.pageUrl, "Manufacturer page"),
+      chrono24Url: optionalHttpUrl(body.chrono24Url, "Chrono24 link"),
       retailPriceCents: optionalMoney(body, "retailPrice"),
       chrono24PriceCents: optionalMoney(body, "chrono24Price"),
     });

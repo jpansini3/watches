@@ -35,6 +35,7 @@ export function WatchDetailView({ initialWatch }: { initialWatch: WatchDetail })
   const [model, setModel] = useState(initialWatch.model);
   const [referenceNumber, setReferenceNumber] = useState(initialWatch.referenceNumber ?? "");
   const [imageUrl, setImageUrl] = useState(initialWatch.imageUrl ?? "");
+  const [pageUrl, setPageUrl] = useState(initialWatch.pageUrl ?? "");
   const [retailPrice, setRetailPrice] = useState(centsToDollarsInput(initialWatch.retailPriceCents));
   const [chrono24Price, setChrono24Price] = useState(centsToDollarsInput(initialWatch.chrono24PriceCents));
   const [chrono24Url, setChrono24Url] = useState(initialWatch.chrono24Url ?? "");
@@ -47,6 +48,7 @@ export function WatchDetailView({ initialWatch }: { initialWatch: WatchDetail })
     setModel(next.model);
     setReferenceNumber(next.referenceNumber ?? "");
     setImageUrl(next.imageUrl ?? "");
+    setPageUrl(next.pageUrl ?? "");
     setRetailPrice(centsToDollarsInput(next.retailPriceCents));
     setChrono24Price(centsToDollarsInput(next.chrono24PriceCents));
     setChrono24Url(next.chrono24Url ?? "");
@@ -64,6 +66,7 @@ export function WatchDetailView({ initialWatch }: { initialWatch: WatchDetail })
           model,
           referenceNumber: referenceNumber || null,
           imageUrl: imageUrl || null,
+          pageUrl: pageUrl || null,
           retailPrice: retailPrice || null,
           chrono24Price: chrono24Price || null,
           chrono24Url: chrono24Url || null,
@@ -101,6 +104,13 @@ export function WatchDetailView({ initialWatch }: { initialWatch: WatchDetail })
             <h1 className="mt-1 font-serif text-4xl tracking-tight">{watch.model}</h1>
             {watch.referenceNumber ? (
               <p className="mt-1 text-sm text-muted-foreground">Ref. {watch.referenceNumber}</p>
+            ) : null}
+            {watch.pageUrl ? (
+              <p className="mt-3">
+                <a href={watch.pageUrl} className="text-sm underline" target="_blank" rel="noreferrer">
+                  Manufacturer page
+                </a>
+              </p>
             ) : null}
             <dl className="mt-6 grid grid-cols-2 gap-4">
               <div className="rounded-lg border border-border bg-card p-4">
@@ -162,6 +172,12 @@ export function WatchDetailView({ initialWatch }: { initialWatch: WatchDetail })
           <Labeled label="Model" value={model} onChange={setModel} required />
           <Labeled label="Reference number" value={referenceNumber} onChange={setReferenceNumber} placeholder="126610LN" />
           <PhotoField id="detail-photo" value={imageUrl} onChange={setImageUrl} />
+          <Labeled
+            label="Manufacturer page"
+            value={pageUrl}
+            onChange={setPageUrl}
+            placeholder="https://nomos-glashuette.com/..."
+          />
           <div className="grid gap-4 sm:grid-cols-2">
             <Labeled label="Price new" value={retailPrice} onChange={setRetailPrice} placeholder="12500" inputMode="decimal" />
             <Labeled
