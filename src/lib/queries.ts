@@ -18,6 +18,7 @@ export type WatchSummary = {
   model: string;
   referenceNumber: string | null;
   imageUrl: string | null;
+  pageUrl: string | null;
   chrono24Url: string | null;
   retailPriceCents: number | null;
   chrono24PriceCents: number | null;
@@ -33,6 +34,7 @@ export type WatchInput = {
   model: string;
   referenceNumber?: string | null;
   imageUrl?: string | null;
+  pageUrl?: string | null;
   chrono24Url?: string | null;
   retailPriceCents?: number | null;
   chrono24PriceCents?: number | null;
@@ -45,6 +47,7 @@ export type WatchPatch = {
   model?: string;
   referenceNumber?: string | null;
   imageUrl?: string | null;
+  pageUrl?: string | null;
   chrono24Url?: string | null;
   retailPriceCents?: number | null;
   chrono24PriceCents?: number | null;
@@ -68,6 +71,7 @@ function summaryFrom(
     model: string;
     referenceNumber: string | null;
     imageUrl: string | null;
+    pageUrl: string | null;
     chrono24Url: string | null;
   },
   prices: PriceRow[],
@@ -113,6 +117,7 @@ export async function listWatches(): Promise<WatchSummary[]> {
       model: watches.model,
       referenceNumber: watches.referenceNumber,
       imageUrl: watches.imageUrl,
+      pageUrl: watches.pageUrl,
       chrono24Url: watches.chrono24Url,
     })
     .from(watches)
@@ -131,6 +136,7 @@ export async function getWatch(id: number): Promise<WatchDetail | null> {
       model: watches.model,
       referenceNumber: watches.referenceNumber,
       imageUrl: watches.imageUrl,
+      pageUrl: watches.pageUrl,
       chrono24Url: watches.chrono24Url,
     })
     .from(watches)
@@ -205,6 +211,7 @@ export async function createWatch(input: WatchInput): Promise<WatchDetail> {
         model,
         referenceNumber: blankToNull(input.referenceNumber),
         imageUrl: input.imageUrl ?? null,
+        pageUrl: input.pageUrl ?? null,
         chrono24Url: input.chrono24Url ?? null,
       })
       .returning({ id: watches.id });
@@ -237,6 +244,7 @@ export async function updateWatch(id: number, patch: WatchPatch): Promise<WatchD
       model?: string;
       referenceNumber?: string | null;
       imageUrl?: string | null;
+      pageUrl?: string | null;
       chrono24Url?: string | null;
     } = {};
     if (patch.manufacturer !== undefined) {
@@ -249,6 +257,7 @@ export async function updateWatch(id: number, patch: WatchPatch): Promise<WatchD
     }
     if (patch.referenceNumber !== undefined) values.referenceNumber = blankToNull(patch.referenceNumber);
     if (patch.imageUrl !== undefined) values.imageUrl = patch.imageUrl;
+    if (patch.pageUrl !== undefined) values.pageUrl = patch.pageUrl;
     if (patch.chrono24Url !== undefined) values.chrono24Url = patch.chrono24Url;
     if (Object.keys(values).length > 0) {
       await db.update(watches).set(values).where(eq(watches.id, id));

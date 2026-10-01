@@ -259,6 +259,7 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
           model,
           referenceNumber: referenceNumber || null,
           imageUrl: imageUrl || null,
+          pageUrl: pageUrl || null,
           retailPrice: retailPrice || null,
           chrono24Price: chrono24Price || null,
           chrono24Url: chrono24Url || null,

@@ -24,6 +24,7 @@ export const watches = pgTable("watches", {
   model: text("model").notNull(),
   referenceNumber: text("reference_number"),
   imageUrl: text("image_url"),
+  pageUrl: text("page_url"),
   chrono24Url: text("chrono24_url"),
 });
 
