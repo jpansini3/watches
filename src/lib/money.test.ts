@@ -17,6 +17,7 @@ test("parseMoneyToCents accepts dollars and currency text", () => {
   assert.equal(parseMoneyToCents(99.9), 9990);
   assert.equal(parseMoneyToCents(""), null);
   assert.equal(parseMoneyToCents(null), null);
+  assert.equal(parseMoneyToCents("30000000"), 3_000_000_000);
 });
 
 test("parseMoneyToCents rejects junk", () => {

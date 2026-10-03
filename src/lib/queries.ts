@@ -7,8 +7,9 @@ import {
   type PriceSource,
 } from "@drizzle/schema";
 import { db } from "@/lib/db";
-import { withDbTransaction } from "@/lib/db-transaction";
+import { withDbTransaction, type DbTx } from "@/lib/db-transaction";
 import { latestPriceAction, latestPriceCents, todayIso, type PriceRow } from "@/lib/money";
+import { deleteUpload } from "@/lib/object-store";
 
 export type ComplicationItem = { id: number; name: string };
 
@@ -157,34 +158,65 @@ export async function getWatch(id: number): Promise<WatchDetail | null> {
   };
 }
 
-async function findOrCreateManufacturer(name: string): Promise<number> {
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("Manufacturer is required");
-  const [existing] = await db
-    .select({ id: manufacturers.id })
-    .from(manufacturers)
-    .where(sql`lower(${manufacturers.name}) = ${trimmed.toLowerCase()}`);
-  if (existing) return existing.id;
-  const [created] = await db.insert(manufacturers).values({ name: trimmed }).returning({ id: manufacturers.id });
-  return created.id;
+function isUniqueViolation(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const code = (err as { code?: string }).code ?? (err as { cause?: { code?: string } }).cause?.code;
+  return code === "23505";
 }
 
-async function deleteManufacturerIfUnused(id: number) {
-  const [used] = await db
+async function findManufacturerId(tx: DbTx, name: string): Promise<number | null> {
+  const [existing] = await tx
+    .select({ id: manufacturers.id })
+    .from(manufacturers)
+    .where(sql`lower(${manufacturers.name}) = ${name.toLowerCase()}`)
+    .orderBy(asc(manufacturers.id))
+    .limit(1);
+  return existing?.id ?? null;
+}
+
+async function findOrCreateManufacturer(tx: DbTx, name: string): Promise<number> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Manufacturer is required");
+  const existing = await findManufacturerId(tx, trimmed);
+  if (existing) return existing;
+  try {
+    return await tx.transaction(async (inner) => {
+      const [created] = await inner
+        .insert(manufacturers)
+        .values({ name: trimmed })
+        .returning({ id: manufacturers.id });
+      return created.id;
+    });
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    const raced = await findManufacturerId(tx, trimmed);
+    if (raced) return raced;
+    throw err;
+  }
+}
+
+async function deleteManufacturerIfUnused(tx: DbTx, id: number) {
+  const [used] = await tx
     .select({ id: watches.id })
     .from(watches)
     .where(eq(watches.manufacturerId, id))
     .limit(1);
   if (!used) {
-    await db.delete(manufacturers).where(eq(manufacturers.id, id));
+    await tx.delete(manufacturers).where(eq(manufacturers.id, id));
   }
 }
 
-async function insertPrice(watchId: number, source: PriceSource, amountCents: number, recordedOn: string) {
-  await db.insert(pricePoints).values({ watchId, source, amountCents, recordedOn });
+async function insertPrice(
+  tx: DbTx,
+  watchId: number,
+  source: PriceSource,
+  amountCents: number,
+  recordedOn: string,
+) {
+  await tx.insert(pricePoints).values({ watchId, source, amountCents, recordedOn });
 }
 
-async function insertComplications(watchId: number, names: string[]) {
+async function insertComplications(tx: DbTx, watchId: number, names: string[]) {
   const seen = new Set<string>();
   let rank = 0;
   for (const raw of names) {
@@ -193,7 +225,7 @@ async function insertComplications(watchId: number, names: string[]) {
     const key = name.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    await db.insert(complications).values({ watchId, name, rank });
+    await tx.insert(complications).values({ watchId, name, rank });
     rank += 1;
   }
 }
@@ -202,9 +234,9 @@ export async function createWatch(input: WatchInput): Promise<WatchDetail> {
   const model = input.model.trim();
   if (!model) throw new Error("Model is required");
   const recordedOn = input.recordedOn ?? todayIso();
-  const id = await withDbTransaction(async () => {
-    const manufacturerId = await findOrCreateManufacturer(input.manufacturer);
-    const [created] = await db
+  const id = await withDbTransaction(async (tx) => {
+    const manufacturerId = await findOrCreateManufacturer(tx, input.manufacturer);
+    const [created] = await tx
       .insert(watches)
       .values({
         manufacturerId,
@@ -216,13 +248,13 @@ export async function createWatch(input: WatchInput): Promise<WatchDetail> {
       })
       .returning({ id: watches.id });
     if (input.retailPriceCents != null) {
-      await insertPrice(created.id, "retail", input.retailPriceCents, recordedOn);
+      await insertPrice(tx, created.id, "retail", input.retailPriceCents, recordedOn);
     }
     if (input.chrono24PriceCents != null) {
-      await insertPrice(created.id, "chrono24", input.chrono24PriceCents, recordedOn);
+      await insertPrice(tx, created.id, "chrono24", input.chrono24PriceCents, recordedOn);
     }
     if (input.complications?.length) {
-      await insertComplications(created.id, input.complications);
+      await insertComplications(tx, created.id, input.complications);
     }
     return created.id;
   });
@@ -233,12 +265,13 @@ export async function createWatch(input: WatchInput): Promise<WatchDetail> {
 
 export async function updateWatch(id: number, patch: WatchPatch): Promise<WatchDetail | null> {
   const current = await db
-    .select({ manufacturerId: watches.manufacturerId })
+    .select({ manufacturerId: watches.manufacturerId, imageUrl: watches.imageUrl })
     .from(watches)
     .where(eq(watches.id, id));
   if (!current[0]) return null;
   const previousManufacturerId = current[0].manufacturerId;
-  await withDbTransaction(async () => {
+  const previousImage = current[0].imageUrl;
+  await withDbTransaction(async (tx) => {
     const values: {
       manufacturerId?: number;
       model?: string;
@@ -248,7 +281,7 @@ export async function updateWatch(id: number, patch: WatchPatch): Promise<WatchD
       chrono24Url?: string | null;
     } = {};
     if (patch.manufacturer !== undefined) {
-      values.manufacturerId = await findOrCreateManufacturer(patch.manufacturer);
+      values.manufacturerId = await findOrCreateManufacturer(tx, patch.manufacturer);
     }
     if (patch.model !== undefined) {
       const model = patch.model.trim();
@@ -260,23 +293,26 @@ export async function updateWatch(id: number, patch: WatchPatch): Promise<WatchD
     if (patch.pageUrl !== undefined) values.pageUrl = patch.pageUrl;
     if (patch.chrono24Url !== undefined) values.chrono24Url = patch.chrono24Url;
     if (Object.keys(values).length > 0) {
-      await db.update(watches).set(values).where(eq(watches.id, id));
+      await tx.update(watches).set(values).where(eq(watches.id, id));
     }
     if (patch.retailPriceCents !== undefined) {
-      await applyLatestPrice(id, "retail", patch.retailPriceCents);
+      await applyLatestPrice(tx, id, "retail", patch.retailPriceCents);
     }
     if (patch.chrono24PriceCents !== undefined) {
-      await applyLatestPrice(id, "chrono24", patch.chrono24PriceCents);
+      await applyLatestPrice(tx, id, "chrono24", patch.chrono24PriceCents);
     }
     if (values.manufacturerId && values.manufacturerId !== previousManufacturerId) {
-      await deleteManufacturerIfUnused(previousManufacturerId);
+      await deleteManufacturerIfUnused(tx, previousManufacturerId);
     }
   });
+  if (patch.imageUrl !== undefined && patch.imageUrl !== previousImage) {
+    await releaseUpload(previousImage);
+  }
   return getWatch(id);
 }
 
-async function applyLatestPrice(watchId: number, source: PriceSource, amountCents: number | null) {
-  const rows = await db
+async function applyLatestPrice(tx: DbTx, watchId: number, source: PriceSource, amountCents: number | null) {
+  const rows = await tx
     .select({
       id: pricePoints.id,
       source: pricePoints.source,
@@ -287,25 +323,50 @@ async function applyLatestPrice(watchId: number, source: PriceSource, amountCent
     .where(eq(pricePoints.watchId, watchId));
   const action = latestPriceAction(rows, source, amountCents, todayIso());
   if (action.type === "insert") {
-    await insertPrice(watchId, source, action.amountCents, action.recordedOn);
+    await insertPrice(tx, watchId, source, action.amountCents, action.recordedOn);
   } else if (action.type === "update") {
-    await db.update(pricePoints).set({ amountCents: action.amountCents }).where(eq(pricePoints.id, action.id));
+    await tx.update(pricePoints).set({ amountCents: action.amountCents }).where(eq(pricePoints.id, action.id));
   } else if (action.type === "delete") {
-    await db.delete(pricePoints).where(eq(pricePoints.id, action.id));
+    await tx.delete(pricePoints).where(eq(pricePoints.id, action.id));
   }
 }
 
 export async function deleteWatch(id: number): Promise<boolean> {
   const [row] = await db
-    .select({ manufacturerId: watches.manufacturerId })
+    .select({ manufacturerId: watches.manufacturerId, imageUrl: watches.imageUrl })
     .from(watches)
     .where(eq(watches.id, id));
   if (!row) return false;
-  await withDbTransaction(async () => {
-    await db.delete(watches).where(eq(watches.id, id));
-    await deleteManufacturerIfUnused(row.manufacturerId);
+  await withDbTransaction(async (tx) => {
+    await tx.delete(watches).where(eq(watches.id, id));
+    await deleteManufacturerIfUnused(tx, row.manufacturerId);
   });
+  await releaseUpload(row.imageUrl);
   return true;
+}
+
+function uploadFilename(imageUrl: string | null): string | null {
+  if (!imageUrl?.startsWith("/api/uploads/")) return null;
+  const filename = imageUrl.slice("/api/uploads/".length);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(filename) || filename.includes("..")) return null;
+  return filename;
+}
+
+async function releaseUpload(imageUrl: string | null) {
+  if (!imageUrl) return;
+  const filename = uploadFilename(imageUrl);
+  if (!filename) return;
+  const [stillUsed] = await db
+    .select({ id: watches.id })
+    .from(watches)
+    .where(eq(watches.imageUrl, imageUrl))
+    .limit(1);
+  if (stillUsed) return;
+  try {
+    await deleteUpload(filename);
+  } catch (err) {
+    console.error("[uploads] delete failed:", err);
+  }
 }
 
 export async function addPricePoint(

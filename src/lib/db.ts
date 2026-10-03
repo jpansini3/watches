@@ -35,23 +35,35 @@ function resolveUploadsPath(): string {
 const uploadsPath = resolveUploadsPath();
 fs.mkdirSync(uploadsPath, { recursive: true });
 
-/** Single connection so BEGIN/COMMIT wraps the same queries. */
-export const sql = postgres(resolveDatabaseUrl(), {
-  max: 1,
+const sql = postgres(resolveDatabaseUrl(), {
+  max: 10,
   idle_timeout: 20,
   connect_timeout: isBuild ? 1 : 30,
 });
 
 export const db = drizzle({ client: sql });
 
+/**
+ * Migrations take their own connection. An advisory lock is session-scoped, so
+ * the lock, the migration queries, and the unlock have to share that session.
+ */
 async function applyMigrations() {
-  await sql`SELECT pg_advisory_lock(${MIGRATION_LOCK})`;
+  const migrationSql = postgres(resolveDatabaseUrl(), {
+    max: 1,
+    connect_timeout: 30,
+  });
+  const migrationDb = drizzle({ client: migrationSql });
+  await migrationSql`SELECT pg_advisory_lock(${MIGRATION_LOCK})`;
   try {
-    await migrate(db, {
+    await migrate(migrationDb, {
       migrationsFolder: path.join(process.cwd(), "drizzle", "migrations"),
     });
   } finally {
-    await sql`SELECT pg_advisory_unlock(${MIGRATION_LOCK})`;
+    try {
+      await migrationSql`SELECT pg_advisory_unlock(${MIGRATION_LOCK})`;
+    } finally {
+      await migrationSql.end({ timeout: 5 });
+    }
   }
 }
 

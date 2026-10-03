@@ -2,12 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   chooseListing,
-  chooseProductImage,
-  chooseRetailOffer,
   complicationsFromText,
+  lookupWatch,
+  manufacturerPages,
   parseCatalogProduct,
-  parseMarkdownImages,
-  parseRetailOffers,
   parseSearchCards,
   type ListingCard,
 } from "./watch-lookup.ts";
@@ -86,89 +84,77 @@ test("catalog product json supplies the photo, description, and ask", () => {
   assert.match(product?.description ?? "", /3 o'clock/);
 });
 
-const ROLEX_GRID = `
-![Image 2: Submariner Date, Oyster, 41 mm, Oystersteel and yellow gold, Dial : Black, Rolex](https://media.rolex.com/m126613lb-0002)## Submariner Date
-
-Oyster, 41 mm, Oystersteel and yellow gold
-
-$19,450 USD
-![Image 3: Submariner Date, Oyster, 41 mm, Oystersteel, Dial : Black, Rolex](https://media.rolex.com/m126610ln-0001)## Submariner Date
-
-Oyster, 41 mm, Oystersteel
-
-$11,350 USD
-![Image 4: Submariner Date, Oyster, 41 mm, Oystersteel, Dial : Black, Rolex](https://media.rolex.com/m126610lv-0002)## Submariner Date
-
-Oyster, 41 mm, Oystersteel
-
-$11,900 USD
-![Image 5: Submariner, Oyster, 41 mm, Oystersteel, Dial : Black, Rolex](https://media.rolex.com/m124060-0001)## Submariner
-
-Oyster, 41 mm, Oystersteel
-
-$10,050 USD
-`;
-
-const OMEGA_LIST = `
-Speedmaster Moonwatch Professional
-42 mm, steel on rubber strap
-$8,700
-Speedmaster Moonwatch Professional
-42 mm, steel on steel
-$9,100
-`;
-
-test("manufacturer grid prefers the steel Submariner Date over gold, green, and no-date", () => {
-  const offers = parseRetailOffers(ROLEX_GRID);
-  const chosen = chooseRetailOffer(offers, "Submariner Date");
-  assert.equal(chosen?.priceCents, 1_135_000);
-  assert.equal(chosen?.reference, "126610LN");
-  assert.equal(chosen?.imageUrl, "https://media.rolex.com/m126610ln-0001");
-});
-
-test("a green Submariner Date prefers the LV reference", () => {
-  const chosen = chooseRetailOffer(parseRetailOffers(ROLEX_GRID), "Submariner Date green");
-  assert.equal(chosen?.reference, "126610LV");
-});
-
-test("nearby prices prefer a steel bracelet when the model does not ask for a strap", () => {
-  const chosen = chooseRetailOffer(parseRetailOffers(OMEGA_LIST), "Speedmaster");
-  assert.equal(chosen?.priceCents, 910_000);
-});
-
-const NOMOS_SEARCH = `
-![Image 1: Square NOMOS watch](https://cdn.nomos-glashuette.com/img/tetra-2d-front-masked.jpg)
-
-[Tetra 27 duo doré](https://nomos-glashuette.com/en/tetra/tetra-27-duo-dore-405)
-
-![Image 2: Front view of a Tangente](https://cdn.nomos-glashuette.com/img/tangente-2d-front-masked.jpg)
-
-[Tangente](https://nomos-glashuette.com/en/tangente/tangente-101)
-
-![Image 5: Tangente with a date](https://cdn.nomos-glashuette.com/img/tangente-2date-front-masked.jpg)
-
-[Tangente 2date blue](https://nomos-glashuette.com/en/tangente/tangente-2date-blue-136)
-
-![Image 6: Case back](https://cdn.nomos-glashuette.com/img/tangente-2d-back-masked.jpg)
-
-[Tangente](https://nomos-glashuette.com/en/tangente/tangente-101)
-`;
-
-test("product photos prefer the named model on the manufacturer site", () => {
-  const shots = parseMarkdownImages(NOMOS_SEARCH);
+test("brand pages stay on that manufacturer's families", () => {
   assert.equal(
-    chooseProductImage(shots, "Nomos", "Tangente"),
-    "https://cdn.nomos-glashuette.com/img/tangente-2d-front-masked.jpg",
+    manufacturerPages("Tudor", "Black Bay GMT")[0],
+    "https://www.tudorwatch.com/en/watches/black-bay",
   );
   assert.equal(
-    chooseProductImage(shots, "Nomos", "Tangente 2date"),
-    "https://cdn.nomos-glashuette.com/img/tangente-2date-front-masked.jpg",
+    manufacturerPages("Omega", "Speedmaster Moonwatch")[0],
+    "https://www.omegawatches.com/en-us/watches/speedmaster",
+  );
+  assert.equal(
+    manufacturerPages("Rolex", "GMT-Master II")[0],
+    "https://www.rolex.com/en-us/watches/gmt-master-ii/all-models",
   );
 });
 
-test("product photos ignore an unrelated manufacturer image", () => {
-  const shots = parseMarkdownImages(NOMOS_SEARCH);
-  assert.equal(chooseProductImage(shots, "Nomos", "Orion"), null);
+const ROLEX_PAGE = `
+<script type="application/ld+json">
+{
+  "@graph": [
+    {
+      "@type": "Product",
+      "name": "Submariner Date",
+      "sku": "126613LB",
+      "material": "Oystersteel and yellow gold",
+      "image": "https://media.rolex.com/m126613lb-front.jpg",
+      "offers": { "price": "19450", "priceCurrency": "USD" }
+    },
+    {
+      "@type": "Product",
+      "name": "Submariner Date",
+      "sku": "126610LN",
+      "material": "Oystersteel",
+      "image": "https://media.rolex.com/m126610ln-front.jpg",
+      "offers": { "price": "11350", "priceCurrency": "USD" }
+    },
+    {
+      "@type": "Product",
+      "name": "Submariner Date",
+      "sku": "126610LV",
+      "material": "Oystersteel",
+      "description": "Green bezel",
+      "image": "https://media.rolex.com/m126610lv-front.jpg",
+      "offers": { "price": "11900", "priceCurrency": "USD" }
+    }
+  ]
+}
+</script>
+`;
+
+test("a catalog ask is not stored as the Chrono24 price", async () => {
+  const lookupHost = async () => [{ address: "93.184.216.34" }];
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("swisswatchexpo.com/search")) return htmlResponse(SEARCH_HTML);
+    if (url.includes("swisswatchexpo.com/watches/")) {
+      return htmlResponse(`
+        <script type="application/ld+json">
+          { "@type": "Product", "name": "Rolex Submariner Date", "description": "Date calendar.", "brand": { "name": "Rolex" }, "offers": { "price": "11050.00" }, "image": ["https://cdn.swisswatchexpo.com/large.jpg"] }
+        </script>
+      `);
+    }
+    if (url.includes("rolex.com")) return htmlResponse(ROLEX_PAGE);
+    return new Response("missing", { status: 404 });
+  };
+  const result = await lookupWatch("Rolex", "Submariner Date", fetchImpl, lookupHost);
+  assert.equal(result.chrono24Price, null);
+  assert.match(result.chrono24Url, /chrono24\.com/);
+  assert.equal(result.retailPrice, "11350");
+  assert.equal(result.referenceNumber, "126610LN");
+  assert.equal(result.imageUrl, "https://media.rolex.com/m126610ln-front.jpg");
+  assert.match(result.note, /search link/);
 });
 
 test("chooseListing ignores a brand that does not match", () => {
@@ -177,3 +163,7 @@ test("chooseListing ignores a brand that does not match", () => {
   ];
   assert.equal(chooseListing(cards, "Rolex", "Submariner"), null);
 });
+
+function htmlResponse(html: string): Response {
+  return new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+}

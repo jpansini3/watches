@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -80,6 +81,21 @@ async function getLocal(filename: string): Promise<Buffer | null> {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw err;
   }
+}
+
+export async function deleteUpload(filename: string): Promise<void> {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(filename) || filename.includes("..")) return;
+  const cfg = r2Config();
+  if (cfg) {
+    const client = s3Client(cfg.endpoint, cfg.accessKeyId, cfg.secretAccessKey);
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: cfg.bucket,
+        Key: objectKey(cfg.prefix, filename),
+      }),
+    );
+  }
+  await fs.promises.rm(path.join(getUploadsPath(), filename), { force: true });
 }
 
 export async function putUpload(
