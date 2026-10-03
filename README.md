@@ -2,7 +2,7 @@
 
 A list of watches to buy. Each watch has a photo, manufacturer, model, the price of a new one, and the cheapest Chrono24 price. Open a watch for a price graph and its complications. Next.js + **Postgres** (Drizzle). Uploads use local disk when `R2_*` is unset, or Cloudflare R2 (`pansini-uploads`) in the cluster.
 
-**Fill from this page** on the add form reads a manufacturer product URL and fills the name, photo, US price, and features. It uses the schema.org or Open Graph product data on that page, so it works for any manufacturer that publishes those tags. The Chrono24 price is not on the manufacturer page. **Look up details** still searches by manufacturer and model when you don't have a product URL. The photo comes from the manufacturer's site (or a Chrono24 listing when that site returns one). The new price comes from the manufacturer's US site. Chrono24 blocks automated price lookups, so that field gets the lowest matching dealer ask and a Chrono24 search link you can check.
+**Fill from this page** on the add form reads a manufacturer product URL and fills the name, photo, US price, and features. It uses the schema.org or Open Graph product data on that page, so it works for any manufacturer that publishes those tags. The Chrono24 price is not filled in automatically. **Look up details** still searches by manufacturer and model when you don't have a product URL. The photo comes from the manufacturer's site, or from a dealer listing when that site has no photo. The new price comes from the manufacturer's US site when that page publishes product data. Chrono24 blocks automated price lookups, so the form keeps a Chrono24 search link and leaves that price for you to enter.
 
 ## Local
 

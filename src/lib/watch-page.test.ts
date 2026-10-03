@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { isBlockedAddress } from "./safe-fetch.ts";
 import { lookupProductPage, parseProductPage } from "./watch-page.ts";
 
 const NOMOS_URL = "https://nomos-glashuette.com/en-us/tangente/tangente-sport-neomatik-42-date-580";
@@ -199,8 +200,14 @@ test("lookup refuses local, credentialed, and non-https urls before fetching", a
   await assert.rejects(() => lookupProductPage("https://127.0.0.1/watch", fetchImpl), /can't be fetched/);
   await assert.rejects(() => lookupProductPage("https://localhost/watch", fetchImpl), /can't be fetched/);
   await assert.rejects(() => lookupProductPage("https://169.254.169.254/latest", fetchImpl), /can't be fetched/);
+  await assert.rejects(() => lookupProductPage("https://[::ffff:7f00:1]/watch", fetchImpl), /can't be fetched/);
+  await assert.rejects(() => lookupProductPage("https://[::ffff:a9fe:a9fe]/latest", fetchImpl), /can't be fetched/);
   await assert.rejects(
     () => lookupProductPage("https://rebind.example/watch", fetchImpl, async () => [{ address: "10.1.2.3" }]),
+    /can't be fetched/,
+  );
+  await assert.rejects(
+    () => lookupProductPage("https://rebind.example/watch", fetchImpl, async () => [{ address: "::ffff:7f00:1" }]),
     /can't be fetched/,
   );
   assert.deepEqual(fetched, []);
@@ -233,6 +240,54 @@ test("lookup reports a refused manufacturer page", async () => {
       ),
     /refused an automated request/,
   );
+});
+
+test("mapped ipv4 addresses stay blocked in every spelling", () => {
+  assert.equal(isBlockedAddress("::ffff:127.0.0.1"), true);
+  assert.equal(isBlockedAddress("::ffff:7f00:1"), true);
+  assert.equal(isBlockedAddress("0:0:0:0:0:ffff:7f00:1"), true);
+  assert.equal(isBlockedAddress("::ffff:a9fe:a9fe"), true);
+  assert.equal(isBlockedAddress("::ffff:5db8:d822"), false);
+  assert.equal(isBlockedAddress("93.184.216.34"), false);
+});
+
+test("a model match prefers the steel reference over gold and green", () => {
+  const html = `
+    <script type="application/ld+json">
+    {
+      "@graph": [
+        {
+          "@type": "Product",
+          "name": "Submariner Date",
+          "sku": "126613LB",
+          "material": "Oystersteel and yellow gold",
+          "offers": { "price": "19450", "priceCurrency": "USD" }
+        },
+        {
+          "@type": "Product",
+          "name": "Submariner Date",
+          "sku": "126610LN",
+          "material": "Oystersteel",
+          "offers": { "price": "11350", "priceCurrency": "USD" },
+          "image": "https://media.rolex.com/m126610ln-front.jpg"
+        },
+        {
+          "@type": "Product",
+          "name": "Submariner Date",
+          "sku": "126610LV",
+          "material": "Oystersteel",
+          "offers": { "price": "11900", "priceCurrency": "USD" }
+        }
+      ]
+    }
+    </script>
+  `;
+  const page = "https://www.rolex.com/en-us/watches/submariner/all-models";
+  const steel = parseProductPage(html, page, "Submariner Date");
+  assert.equal(steel?.reference, "126610LN");
+  assert.equal(steel?.priceCents, 1_135_000);
+  const green = parseProductPage(html, page, "Submariner Date green");
+  assert.equal(green?.reference, "126610LV");
 });
 
 function htmlResponse(html: string): Response {

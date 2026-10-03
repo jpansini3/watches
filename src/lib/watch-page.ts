@@ -1,11 +1,6 @@
-import { lookup as dnsLookup } from "node:dns/promises";
-import { isIP } from "node:net";
-import { chrono24SearchUrl, complicationsFromText, WatchLookupError, type WatchLookupResult } from "./watch-lookup.ts";
-
-const PAGE_BYTES = 2_000_000;
-const MAX_REDIRECTS = 5;
-
-type HostLookup = (hostname: string) => Promise<{ address: string }[]>;
+import { chrono24SearchUrl, complicationsFromText, type WatchLookupResult } from "./watch-lookup.ts";
+import { fetchHtml, type HostLookup } from "./safe-fetch.ts";
+import { WatchLookupError } from "./lookup-error.ts";
 
 export type ParsedProduct = {
   manufacturer: string | null;
@@ -27,9 +22,9 @@ type OfferPrice = {
 export async function lookupProductPage(
   pageUrl: string,
   fetchImpl: typeof fetch = fetch,
-  lookupHost: HostLookup = dnsAddresses,
+  lookupHost?: HostLookup,
 ): Promise<WatchLookupResult> {
-  const { html, finalUrl } = await fetchProductPage(pageUrl, fetchImpl, lookupHost);
+  const { html, finalUrl } = await fetchHtml(pageUrl, fetchImpl, lookupHost);
   const product = parseProductPage(html, finalUrl);
   if (!product) {
     if (/just a moment|cf-browser-verification|captcha/i.test(html.slice(0, 1_500))) {
@@ -54,32 +49,40 @@ export async function lookupProductPage(
   };
 }
 
-export function parseProductPage(html: string, pageUrl: string): ParsedProduct | null {
+export function parseProductPage(html: string, pageUrl: string, modelQuery?: string): ParsedProduct | null {
   const meta = readMeta(html);
-  const product = pickProduct(collectProducts(html), pageUrl);
-  const micro = product ? null : readMicrodata(html);
+  const products = collectProducts(html);
+  const product = modelQuery ? pickProductForModel(products, modelQuery) : pickProduct(products, pageUrl);
+  if (modelQuery && !product) return null;
+  const micro = product || modelQuery ? null : readMicrodata(html);
 
   const brand =
     (product ? readBrand(product) : null) ??
-    meta.brand ??
+    (modelQuery ? null : meta.brand) ??
     micro?.brand ??
-    cleanSiteName(meta.siteName);
+    (modelQuery ? null : cleanSiteName(meta.siteName));
   const rawName =
     (product ? stringField(product.name) : null) ??
-    meta.title ??
+    (modelQuery ? null : meta.title) ??
     micro?.name ??
-    readTitle(html);
+    (modelQuery ? null : readTitle(html));
   const model = rawName ? cleanModel(rawName, brand) : "";
   if (!model) return null;
 
-  const description = [product ? stringField(product.description) : null, micro?.description, meta.description]
+  const description = [
+    product ? stringField(product.description) : null,
+    modelQuery ? null : micro?.description,
+    modelQuery ? null : meta.description,
+  ]
     .filter((item): item is string => !!item)
     .map(plainText)
     .join(" ");
   const properties = product ? propertyBlob(product) : "";
   const productImages = product ? readImages(product.image) : [];
-  const fallbackImages = [meta.image, micro?.image].filter((item): item is string => !!item);
-  const offer = chooseOffer(product ? readOffers(product.offers) : [], pageUrl) ?? metaOffer(meta, pageUrl) ?? microOffer(micro, pageUrl);
+  const fallbackImages = modelQuery ? [] : [meta.image, micro?.image].filter((item): item is string => !!item);
+  const offer =
+    chooseOffer(product ? readOffers(product.offers) : [], pageUrl) ??
+    (modelQuery ? null : metaOffer(meta, pageUrl) ?? microOffer(micro, pageUrl));
 
   return {
     manufacturer: brand,
@@ -94,129 +97,54 @@ export function parseProductPage(html: string, pageUrl: string): ParsedProduct |
   };
 }
 
-async function fetchProductPage(
-  pageUrl: string,
-  fetchImpl: typeof fetch,
-  lookupHost: HostLookup,
-): Promise<{ html: string; finalUrl: string }> {
-  let current = await checkPageUrl(pageUrl, lookupHost);
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    let response: Response;
-    try {
-      response = await fetchImpl(current, {
-        redirect: "manual",
-        headers: {
-          Accept: "text/html,application/xhtml+xml;q=0.9",
-          "Accept-Language": "en-US,en;q=0.9",
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        },
-        signal: AbortSignal.timeout(15_000),
-      });
-    } catch {
-      throw new WatchLookupError("Could not reach that manufacturer page", 502);
-    }
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location");
-      if (!location) throw new WatchLookupError("The manufacturer page redirected without a destination", 502);
-      if (hop === MAX_REDIRECTS) throw new WatchLookupError("The manufacturer page redirected too many times", 502);
-      current = await checkPageUrl(new URL(location, current).toString(), lookupHost);
-      continue;
-    }
-    if (response.status === 401 || response.status === 403 || response.status === 429) {
-      throw new WatchLookupError("That site refused an automated request. Copy the details from the page.", 502);
-    }
-    if (!response.ok) throw new WatchLookupError(`The manufacturer page returned ${response.status}`, 502);
-    const type = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-    if (/^(image|audio|video|application\/pdf|application\/zip|application\/octet-stream)$/.test(type)) {
-      throw new WatchLookupError("That URL is not a product page", 400);
-    }
-    return { html: await readLimited(response), finalUrl: current.toString() };
-  }
-  throw new WatchLookupError("The manufacturer page redirected too many times", 502);
+function pickProductForModel(products: Record<string, unknown>[], model: string): Record<string, unknown> | null {
+  const ranked = products.flatMap((product) => {
+    if (!stringField(product.name)) return [];
+    const score = scoreProductForModel(product, model);
+    if (score <= 0) return [];
+    return [{ product, score, price: chooseOffer(readOffers(product.offers), "https://example.com/en-us")?.cents ?? Number.MAX_SAFE_INTEGER }];
+  });
+  ranked.sort((a, b) => b.score - a.score || a.price - b.price);
+  return ranked[0]?.product ?? null;
 }
 
-async function checkPageUrl(value: string, lookupHost: HostLookup): Promise<URL> {
-  let url: URL;
-  try {
-    url = new URL(value.trim());
-  } catch {
-    throw new WatchLookupError("Enter an https product page URL", 400);
+function scoreProductForModel(product: Record<string, unknown>, model: string): number {
+  const label = normalize(
+    [stringField(product.name), readReference(product), stringField(product.material), stringField(product.size), stringField(product.description)]
+      .filter(Boolean)
+      .join(" "),
+  );
+  const query = normalize(model);
+  const labelTokens = new Set(tokens(label));
+  const queryTokens = tokens(model);
+  const wantsDate = queryTokens.includes("date") && !query.includes("no date");
+  if (wantsDate && label.includes("no date")) return 0;
+  let score = queryTokens.filter((token) => labelTokens.has(token)).length;
+  if (score === 0) return 0;
+  const mentions = (words: string[]) => words.some((word) => query.includes(word));
+  if (mentions(["gold", "yellow", "rose", "everose", "platinum"])) {
+    if (/\bgold\b|\bplatinum\b|\beverose\b/.test(label)) score += 3;
+  } else if (/\bgold\b|\bplatinum\b|\beverose\b/.test(label)) {
+    score -= 4;
   }
-  if (url.protocol !== "https:") throw new WatchLookupError("Enter an https product page URL", 400);
-  if (url.username || url.password) throw new WatchLookupError("That URL can't be fetched", 400);
-  const hostname = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "");
-  if (!hostname || isBlockedHostname(hostname)) throw new WatchLookupError("That URL can't be fetched", 400);
-  const addresses = isIP(hostname) ? [hostname] : await lookupAddresses(hostname, lookupHost);
-  if (addresses.length === 0 || addresses.some(isPrivateIp)) {
-    throw new WatchLookupError("That URL can't be fetched", 400);
+  if (
+    !mentions(["rubber", "leather", "strap", "nato", "nylon", "fabric"]) &&
+    /\brubber\b|\bleather\b|\bnylon\b|\bfabric\b|\bstrap\b/.test(label)
+  ) {
+    score -= 2;
   }
-  return url;
+  if (mentions(["green", "starbucks", "kermit", "lv"])) {
+    if (label.includes("lv")) score += 3;
+  } else if (label.includes("126610lv")) {
+    score -= 3;
+  }
+  return score;
 }
 
-async function lookupAddresses(hostname: string, lookupHost: HostLookup): Promise<string[]> {
-  try {
-    const records = await lookupHost(hostname);
-    return records.map((record) => record.address);
-  } catch (err) {
-    if (err instanceof WatchLookupError) throw err;
-    throw new WatchLookupError("Could not reach that manufacturer page", 502);
-  }
-}
-
-async function dnsAddresses(hostname: string): Promise<{ address: string }[]> {
-  return dnsLookup(hostname, { all: true, verbatim: true });
-}
-
-function isBlockedHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
-    return true;
-  }
-  return host === "metadata.google.internal" || host === "metadata.google.com";
-}
-
-function isPrivateIp(address: string): boolean {
-  const mapped = address.toLowerCase().startsWith("::ffff:") ? address.slice(7) : address;
-  if (mapped.includes(":")) {
-    const ip = mapped.toLowerCase();
-    if (ip === "::" || ip === "::1") return true;
-    return ip.startsWith("fe80:") || ip.startsWith("fc") || ip.startsWith("fd");
-  }
-  const parts = mapped.split(".").map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
-  const [a, b] = parts;
-  if (a === 0 || a === 10 || a === 127 || a === 255) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  return false;
-}
-
-async function readLimited(response: Response): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) return "";
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (total < PAGE_BYTES) {
-    const { done, value } = await reader.read();
-    if (done || !value) break;
-    const room = PAGE_BYTES - total;
-    chunks.push(value.byteLength > room ? value.slice(0, room) : value);
-    total += Math.min(value.byteLength, room);
-    if (value.byteLength > room) {
-      await reader.cancel();
-      break;
-    }
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+function tokens(value: string): string[] {
+  return normalize(value)
+    .split(" ")
+    .filter((token) => token.length >= 2);
 }
 
 function collectProducts(html: string): Record<string, unknown>[] {

@@ -14,7 +14,7 @@ export function parseMoneyToCents(value: unknown): number | null {
     throw new Error("Enter a price like 12500 or 12500.00");
   }
   const cents = Math.round(Number(cleaned) * 100);
-  if (!Number.isFinite(cents) || cents < 0) {
+  if (!Number.isSafeInteger(cents) || cents < 0) {
     throw new Error("Enter a price like 12500 or 12500.00");
   }
   return cents;

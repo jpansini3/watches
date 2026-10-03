@@ -34,7 +34,7 @@ export function middleware(request: NextRequest) {
     return finishAccessLog(request, response, start);
   }
 
-  if (!MUTATING.has(request.method)) {
+  if (!MUTATING.has(request.method) && !(request.method === "GET" && pathname === "/api/watches/lookup")) {
     return finishAccessLog(request, NextResponse.next(), start);
   }
 

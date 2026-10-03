@@ -1,19 +1,9 @@
-import { dbReady, sql } from "@/lib/db";
+import { db, dbReady } from "@/lib/db";
 
-/** Run work inside a single transaction on the shared Postgres connection. */
-export async function withDbTransaction<T>(fn: () => Promise<T>): Promise<T> {
+/** Drizzle transaction client. postgres.js reserves the connection for the callback. */
+export type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+export async function withDbTransaction<T>(fn: (tx: DbTx) => Promise<T>): Promise<T> {
   await dbReady;
-  await sql`BEGIN`;
-  try {
-    const result = await fn();
-    await sql`COMMIT`;
-    return result;
-  } catch (error) {
-    try {
-      await sql`ROLLBACK`;
-    } catch {
-      // Connection may already be rolled back.
-    }
-    throw error;
-  }
+  return db.transaction(fn);
 }

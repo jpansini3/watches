@@ -208,14 +208,14 @@ function AddWatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   }, [onClose]);
 
   function applyLookup(result: WatchLookupResult) {
-    if (result.manufacturer) setManufacturer(result.manufacturer);
-    if (result.model) setModel(result.model);
-    if (result.referenceNumber) setReferenceNumber(result.referenceNumber);
-    if (result.imageUrl) setImageUrl(result.imageUrl);
-    if (result.retailPrice) setRetailPrice(result.retailPrice);
-    if (result.chrono24Price) setChrono24Price(result.chrono24Price);
-    if (result.chrono24Url) setChrono24Url(result.chrono24Url);
-    if (result.complications) setComplications(result.complications);
+    setManufacturer(result.manufacturer);
+    setModel(result.model);
+    setReferenceNumber(result.referenceNumber ?? "");
+    setImageUrl(result.imageUrl ?? "");
+    setRetailPrice(result.retailPrice ?? "");
+    setChrono24Price(result.chrono24Price ?? "");
+    setChrono24Url(result.chrono24Url);
+    setComplications(result.complications);
     setNote(result.note);
   }
 
